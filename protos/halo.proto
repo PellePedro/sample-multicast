@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package fabric;
+option go_package = "./protos";
+
+message UnaryRequest {}
+message UnaryResponse { bool status = 1; }
+
+message ServerStreamingRequest {}
+message ServerStreamingResponse {
+  string src = 1;
+  string dst = 2;
+  int32  metric1 = 3;
+  int32  metric2 = 4;
+  int32  metric3 = 5;
+}
+
+message ClientStreamingRequest {
+  string src = 1;
+  string dst = 2;
+  int32  status1 = 3;
+  int32  status2 = 4;
+  int32  status3 = 5;
+}
+message ClientStreamingResponse {
+  string src = 1;
+  string dst = 2;
+  int32  metric1 = 3;
+  int32  metric2 = 4;
+  int32  metric3 = 5;
+}
+
+message BiDiStreamingRequest {
+  string src = 1;
+  string dst = 2;
+  int32  status1 = 3;
+  int32  status2 = 4;
+  int32  status3 = 5;
+}
+message BiDiStreamingResponse {
+  string src = 1;
+  string dst = 2;
+  int32  metric1 = 3;
+  int32  metric2 = 4;
+  int32  metric3 = 5;
+}
+
+service RoutingService{
+    // Unary
+    rpc DoUnary(UnaryRequest) returns (UnaryResponse) {};
+    // Server Streaming
+    rpc DoServerStreaming(ServerStreamingRequest) returns (stream ServerStreamingResponse) {};
+    // Client Streaming
+    rpc DoClientStreaming(stream ClientStreamingRequest) returns (ClientStreamingResponse) {};
+    // BiDi Streaming
+    rpc DoBiDiStreaming(stream BiDiStreamingRequest) returns (stream BiDiStreamingResponse) {};
+}
