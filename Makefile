@@ -32,7 +32,7 @@ docker-build:	## - Building Application Container
 		-t ${REGISTRY}/${BINARY}:latest \
 		-t ${REGISTRY}/${BINARY}:${VERSION} \
 		--build-arg binary=$(BINARY) --build-arg build=$(BUILD) --build-arg version=$(VERSION) \
-		-f Dockerfile-make --no-cache .
+		-f Dockerfile --no-cache .
 
 docker-run:	## - Running Application Container
 	@printf "\033[32m\xE2\x9c\x93 Running Application Container ${REGISTRY}/${BINARY} \033[0m"
