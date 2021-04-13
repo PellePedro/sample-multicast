@@ -43,6 +43,7 @@ func main() {
 
 
 	ticker := time.NewTicker(2000 * time.Millisecond)
+	termination := time.NewTimer(2 * time.Minute)
 
 	//	grpcServerIP, found := os.LookupEnv(GRPC_SERVER_IP)
 	//	if found {
@@ -61,6 +62,9 @@ func main() {
 		select {
 		case t := <-ticker.C:
 			fmt.Println("Tick at ", t)
+		case <-termination.C:
+			ticker.Stop()
+			break Loop
 		case s := <-sigChan:
 			_ = s
 			ticker.Stop()
