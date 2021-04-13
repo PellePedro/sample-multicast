@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
+	"time"
 
 	_ "github.com/sirupsen/logrus"
 	_ "vmware.com/tec/halo/pkg/api"
@@ -41,8 +41,8 @@ func main() {
 
 	fmt.Printf("Halo Controller: Version(%s) Build(%s)\n", Version, Build)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+
+	ticker := time.NewTicker(2000 * time.Millisecond)
 
 	//	grpcServerIP, found := os.LookupEnv(GRPC_SERVER_IP)
 	//	if found {
@@ -56,21 +56,18 @@ func main() {
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, signals...)
 
-	for s := range sigChan {
-		switch s {
-		case os.Interrupt:
-			fallthrough
-		case syscall.SIGTERM:
-			fallthrough
-		case syscall.SIGKILL:
-			wg.Done()
+	Loop:
+	for {
+		select {
+		case t := <-ticker.C:
+			fmt.Println("Tick at ", t)
+		case s := <-sigChan:
+			_ = s
+			ticker.Stop()
+			break Loop
 		}
-		fmt.Printf("Controller Terminated")
-		break
 	}
-
 	// Done Channel
 	// stopCh := make(chan bool)
-	wg.Wait()
-
+	fmt.Printf("Controller Terminated")
 }
