@@ -9,7 +9,7 @@ import (
 
 	_ "github.com/sirupsen/logrus"
 	_ "vmware.com/tec/halo/pkg/api"
-	_ "vmware.com/tec/halo/pkg/network"
+	"vmware.com/tec/halo/pkg/network"
 )
 
 const (
@@ -53,6 +53,12 @@ func main() {
 	err := StartToplologyBroadcast()
 	_ = err
 
+	r, err := network.OpenBroadcastConnection()
+	if err != nil {
+		panic("Error Open OpenBroadcast Connection")
+	}
+	go network.ReadConnection(r)
+
 	// Gracefully Handle External Termination
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, signals...)
@@ -61,6 +67,7 @@ func main() {
 	for {
 		select {
 		case t := <-ticker.C:
+			network.WriteConnection(nil,r)
 			fmt.Println("Tick at ", t)
 		case <-termination.C:
 			ticker.Stop()
@@ -71,6 +78,7 @@ func main() {
 			break Loop
 		}
 	}
+	network.CloseConnection(r)
 	// Done Channel
 	// stopCh := make(chan bool)
 	fmt.Printf("Controller Terminated")
