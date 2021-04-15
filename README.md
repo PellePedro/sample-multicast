@@ -5,7 +5,7 @@ A small project to test multicast with sample OSPF Hello.
 
 ## Configuration
 The name of the container interface might be set with the CONTAINER_INTERFACE
-environment variable (default is eth0). Local ip is retrived from the last entry in /etc/hosts
+environment variable, default "eth0". The Local IP is retrived from /etc/hosts
 
 ## Compilation
 ```
