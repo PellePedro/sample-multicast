@@ -3,7 +3,6 @@ package network
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"os"
 
@@ -82,6 +81,7 @@ func (pw *PWConnection) OpenBroadcastConnection() error {
 
 	ifName, err := net.InterfaceByName(interfaceName)
 	if err != nil {
+		fmt.Printf("Failed to retrive interface with name [%s]\n", interfaceName)
 		return err
 	}
 
@@ -135,19 +135,6 @@ func (pw *PWConnection) WriteConnection(b []byte) error {
 
 	return nil
 }
-func ip2int(ip net.IP) uint32 {
-	if len(ip) == 16 {
-		return binary.BigEndian.Uint32(ip[12:16])
-	}
-	return binary.BigEndian.Uint32(ip)
-}
-
-func int2ip(nn uint32) net.IP {
-	ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(ip, nn)
-	return ip
-}
-
 func (pw *PWConnection) ReadConnection() error {
 
 	parseOSPFHeader := func(b []byte) *OSPFHeader {
@@ -195,7 +182,7 @@ func (pw *PWConnection) ReadConnection() error {
 		switch ospfh.Type {
 		case OSPF_TYPE_HELLO:
 			remoteIP := int2ip(ospfh.RouterID)
-			fmt.Printf("Received OSPF Hello from remote Router[%s], My Local IP is [%s]", remoteIP.String(), pw.myLocalIP.String())
+			fmt.Printf("Received OSPF Hello from remote Router[%s], My Local IP is [%s]\n", remoteIP.String(), pw.myLocalIP.String())
 		case OSPF_TYPE_DB_DESCRIPTION:
 		case OSPF_TYPE_LS_REQUEST:
 		case OSPF_TYPE_LS_UPDATE:
@@ -205,148 +192,16 @@ func (pw *PWConnection) ReadConnection() error {
 
 }
 
-// https://github.com/mindscratch/gobrew_fw/blob/789e0974992b2a746af8984df16beb2c5690948b/src/code.google.com/p/go.net/ipv4/example_test.go#L153
-func ExampleIPOSPFListener() {
-	var ifs []*net.Interface
-	en0, err := net.InterfaceByName("en0")
-	if err != nil {
-		log.Fatal(err)
+func ip2int(ip net.IP) uint32 {
+	if len(ip) == 16 {
+		return binary.BigEndian.Uint32(ip[12:16])
 	}
-	ifs = append(ifs, en0)
-	en1, err := net.InterfaceByIndex(911)
-	if err != nil {
-		log.Fatal(err)
-	}
-	ifs = append(ifs, en1)
-
-	c, err := net.ListenPacket("ip4:89", "0.0.0.0") // OSFP for IPv4
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-
-	r, err := ipv4.NewRawConn(c)
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, ifi := range ifs {
-		err := r.JoinGroup(ifi, &net.IPAddr{IP: AllSPFRouters})
-		if err != nil {
-			log.Fatal(err)
-		}
-		err = r.JoinGroup(ifi, &net.IPAddr{IP: AllDRouters})
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	err = r.SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
-	if err != nil {
-		log.Fatal(err)
-	}
-	//r.SetTOS(DiffServCS6)
-
-	parseOSPFHeader := func(b []byte) *OSPFHeader {
-		if len(b) < OSPFHeaderLen {
-			return nil
-		}
-		return &OSPFHeader{
-			Version:  b[0],
-			Type:     b[1],
-			Len:      uint16(b[2])<<8 | uint16(b[3]),
-			RouterID: uint32(b[4])<<24 | uint32(b[5])<<16 | uint32(b[6])<<8 | uint32(b[7]),
-			AreaID:   uint32(b[8])<<24 | uint32(b[9])<<16 | uint32(b[10])<<8 | uint32(b[11]),
-			Checksum: uint16(b[12])<<8 | uint16(b[13]),
-		}
-	}
-
-	b := make([]byte, 1500)
-	for {
-		iph, p, _, err := r.ReadFrom(b)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if iph.Version != ipv4.Version {
-			continue
-		}
-		if iph.Dst.IsMulticast() {
-			if !iph.Dst.Equal(AllSPFRouters) && !iph.Dst.Equal(AllDRouters) {
-				continue
-			}
-		}
-		ospfh := parseOSPFHeader(p)
-		if ospfh == nil {
-			continue
-		}
-		if ospfh.Version != OSPF_VERSION {
-			continue
-		}
-		switch ospfh.Type {
-		case OSPF_TYPE_HELLO:
-		case OSPF_TYPE_DB_DESCRIPTION:
-		case OSPF_TYPE_LS_REQUEST:
-		case OSPF_TYPE_LS_UPDATE:
-		case OSPF_TYPE_LS_ACK:
-		}
-	}
+	return binary.BigEndian.Uint32(ip)
 }
 
-func ExampleWriteIPOSPFHello() {
-	var ifs []*net.Interface
-	en0, err := net.InterfaceByName("en0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	ifs = append(ifs, en0)
-	en1, err := net.InterfaceByIndex(911)
-	if err != nil {
-		log.Fatal(err)
-	}
-	ifs = append(ifs, en1)
-
-	c, err := net.ListenPacket("ip4:89", "0.0.0.0") // OSPF for IPv4
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-
-	r, err := ipv4.NewRawConn(c)
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, ifi := range ifs {
-		err := r.JoinGroup(ifi, &net.IPAddr{IP: AllSPFRouters})
-		if err != nil {
-			log.Fatal(err)
-		}
-		err = r.JoinGroup(ifi, &net.IPAddr{IP: AllDRouters})
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	hello := make([]byte, OSPFHelloHeaderLen)
-	ospf := make([]byte, OSPFHeaderLen)
-	ospf[0] = OSPF_VERSION
-	ospf[1] = OSPF_TYPE_HELLO
-	ospf = append(ospf, hello...)
-	iph := &ipv4.Header{}
-	iph.Version = ipv4.Version
-	iph.Len = ipv4.HeaderLen
-	//iph.TOS = DiffServCS6
-	iph.TotalLen = ipv4.HeaderLen + len(ospf)
-	iph.TTL = 1
-	iph.Protocol = 89
-	iph.Dst = AllSPFRouters
-
-	for _, ifi := range ifs {
-		err := r.SetMulticastInterface(ifi)
-		if err != nil {
-			return
-		}
-		err = r.WriteTo(iph, ospf, nil)
-		if err != nil {
-			return
-		}
-	}
+func int2ip(nn uint32) net.IP {
+	ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip, nn)
+	return ip
 }
+

@@ -1,16 +1,14 @@
 version: "3.8"  # optional since v1.27.0
 services:
   Halo-1:
-    image: registry.vmware.com/tec/halo:0.1.0
+    image: halo:latest
+    environment:
+    - CONTAINER_INTERFACE=eth0
   Halo-2:
-    image: registry.vmware.com/tec/halo:0.1.0
+    image: halo:latest
+    environment:
+    - CONTAINER_INTERFACE=eth0
   Halo-3:
-    image: registry.vmware.com/tec/halo:0.1.0
- #  Halo:
- #    image: halo
- #    build:
- #      dockerfile: Dockerfile-make
- #      context: .
- #      args:
- #        - build=1
- #        - version=cdc3b19
+    image: halo:latest
+    environment:
+    - CONTAINER_INTERFACE=eth0

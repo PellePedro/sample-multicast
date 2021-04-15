@@ -10,16 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/sirupsen/logrus"
-	_ "vmware.com/tec/halo/pkg/api"
-	"vmware.com/tec/halo/pkg/network"
+	"github.com/pellepedro/multicast/pkg/network"
 )
 
-const (
-	app              = "halo"
-	GRPC_SERVER_IP   = "GRPC_SERVER_IP"
-	GRPC_SERVER_PORT = 50051
-)
 
 var (
 	Version = "unknown"
@@ -77,7 +70,7 @@ func main() {
 	localIP, err := findLocalIP()
 	_, _ = err, localIP
 
-	fmt.Printf("Found Local IP[%s]\n", localIP.String())
+	fmt.Printf("Found My Local IP[%s]\n", localIP.String())
 
 	con := network.NewPWConnection(localIP)
 	if err := con.OpenBroadcastConnection(); err != nil {
