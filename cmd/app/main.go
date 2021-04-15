@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,43 +35,67 @@ var signals = []os.Signal{
 	syscall.SIGCONT,
 }
 
-func StartToplologyBroadcast() error {
-	fmt.Println("Started Network Boadcasting")
-	return nil
+func findLocalIP() (net.IP, error) {
+	fp, err := os.Open("/etc/hosts")
+	if err != nil {
+		fmt.Printf("Could not open /etc/hosts: %s\n", err.Error())
+		return nil, nil
+	}
+
+	defer fp.Close()
+
+	rd := bufio.NewReader(fp)
+
+	var localIP net.IP
+	for {
+		ln, _, err := rd.ReadLine()
+		if err != nil {
+			return localIP, nil
+		}
+
+		if len(ln) <= 1 || ln[0] == '#' {
+			continue
+		}
+		fields := bytes.Fields(ln)
+
+		// ensure that it is IPv4 address
+		ip := net.ParseIP(string(fields[0]))
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		localIP = ip
+	}
 }
 
 func main() {
 
 	fmt.Printf("Halo Controller: Version(%s) Build(%s)\n", Version, Build)
 
-
 	ticker := time.NewTicker(2000 * time.Millisecond)
-	termination := time.NewTimer(2 * time.Minute)
+	termination := time.NewTimer(20 * time.Minute)
 
-	//	grpcServerIP, found := os.LookupEnv(GRPC_SERVER_IP)
-	//	if found {
-	//		panic(fmt.Sprintf("Environment Variable %s is not defined\n", GRPC_SERVER_IP))
-	//	}
+	localIP, err := findLocalIP()
+	_, _ = err, localIP
 
-	err := StartToplologyBroadcast()
-	_ = err
+	fmt.Printf("Found Local IP[%s]\n", localIP.String())
 
-	r, err := network.OpenBroadcastConnection()
-	if err != nil {
-		panic("Error Open OpenBroadcast Connection")
+	con := network.NewPWConnection(localIP)
+	if err := con.OpenBroadcastConnection(); err != nil {
+		panic("Error Open Broadcast Connection")
 	}
-	go network.ReadConnection(r)
+
+	go con.ReadConnection()
 
 	// Gracefully Handle External Termination
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, signals...)
 
-	Loop:
+Loop:
 	for {
 		select {
 		case t := <-ticker.C:
-			network.WriteConnection(nil,r)
-			fmt.Println("Tick at ", t)
+			con.WriteConnection(nil)
+			fmt.Println("Sending Hello at ", t)
 		case <-termination.C:
 			ticker.Stop()
 			break Loop
@@ -78,8 +105,6 @@ func main() {
 			break Loop
 		}
 	}
-	network.CloseConnection(r)
-	// Done Channel
-	// stopCh := make(chan bool)
+	con.CloseConnection()
 	fmt.Printf("Controller Terminated")
 }

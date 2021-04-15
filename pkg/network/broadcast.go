@@ -1,11 +1,11 @@
 package network
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"sync"
 
 	"golang.org/x/net/ipv4"
 )
@@ -48,77 +48,76 @@ const (
 	HeaderLen = 20 // header length without extension headers
 )
 
-func OpenBroadcastConnection() (*ipv4.RawConn, error) {
+type PWConnection struct {
+	myLocalIP net.IP
+	closeFunc func()
+	r         *ipv4.RawConn
+}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+func NewPWConnection(localip net.IP) *PWConnection {
+	fmt.Printf("NewPWConnection with ip %s\n",localip.String())
+	return &PWConnection{
+		myLocalIP: localip,
+	}
+}
+
+func (pw *PWConnection) OpenBroadcastConnection() error {
 
 	var interfaceName string
 	var found bool
-	if interfaceName, found = os.LookupEnv("HALO_INTERFACE"); !found {
+	if interfaceName, found = os.LookupEnv("CONTAINER_INTERFACE"); !found {
 		interfaceName = "eth0"
 	}
 
 	c, err := net.ListenPacket("ip4:89", "0.0.0.0") // OSPF for IPv4
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	//defer c.Close()
 
 	r, err := ipv4.NewRawConn(c)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	pw.r = r
 
 	ifName, err := net.InterfaceByName(interfaceName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	r2 := ipv4.NewPacketConn(c)
-	_ = r2
 
 	// RFC 2328
 	allSPFRouters := net.IPAddr{IP: net.IPv4(224, 0, 0, 5)}
 	if err := r.JoinGroup(ifName, &allSPFRouters); err != nil {
-		return nil, err
+		return err
 	}
 
 	err = r.SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	err = r.SetMulticastInterface(ifName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	//r.SetTOS(DiffServCS6)
-	// defer r.LeaveGroup(ifName, &allSPFRouters)
-
-	// cm := &ipv4.ControlMessage{IfIndex:  ben0.Index}
-	// if err := r.WriteTo(iph, ospfHeader, cm); err != nil {
-	// 	log.Fatal(err)
-	//}
-	return r, nil
+	pw.closeFunc = func() {
+		fmt.Println("Executing PWConnection Closure Func")
+		r.LeaveGroup(ifName, &allSPFRouters)
+		c.Close()
+	}
+	return nil
 }
 
-
-func CloseConnection(r *ipv4.RawConn) {
-
-	 interfaceName := "eth0"
-	ifName, err := net.InterfaceByName(interfaceName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	allSPFRouters := net.IPAddr{IP: net.IPv4(224, 0, 0, 5)}
-	r.LeaveGroup(ifName, &allSPFRouters)
+func (pw *PWConnection) CloseConnection() {
+	pw.closeFunc()
 }
 
-func WriteConnection(b []byte, r *ipv4.RawConn) error {
+func (pw *PWConnection) WriteConnection(b []byte) error {
 	hello := make([]byte, OSPFHelloHeaderLen)
 	ospf := make([]byte, OSPFHeaderLen)
 	ospf[0] = OSPF_VERSION
 	ospf[1] = OSPF_TYPE_HELLO
+	myip := ip2int(pw.myLocalIP)
+	binary.BigEndian.PutUint32(ospf[4:8], myip)
 	ospf = append(ospf, hello...)
 	iph := &ipv4.Header{}
 	iph.Version = ipv4.Version
@@ -129,15 +128,27 @@ func WriteConnection(b []byte, r *ipv4.RawConn) error {
 	iph.Protocol = 89
 	iph.Dst = AllSPFRouters
 
-	err := r.WriteTo(iph, ospf, nil)
+	err := pw.r.WriteTo(iph, ospf, nil)
 	if err != nil {
 		fmt.Printf("Failed to write Hello, %s\n", err)
 	}
 
 	return nil
 }
+func ip2int(ip net.IP) uint32 {
+	if len(ip) == 16 {
+		return binary.BigEndian.Uint32(ip[12:16])
+	}
+	return binary.BigEndian.Uint32(ip)
+}
 
-func ReadConnection(r *ipv4.RawConn) error {
+func int2ip(nn uint32) net.IP {
+	ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(ip, nn)
+	return ip
+}
+
+func (pw *PWConnection) ReadConnection() error {
 
 	parseOSPFHeader := func(b []byte) *OSPFHeader {
 		if len(b) < OSPFHeaderLen {
@@ -155,12 +166,11 @@ func ReadConnection(r *ipv4.RawConn) error {
 
 	b := make([]byte, 1500)
 	for {
-		iph, p, _, err := r.ReadFrom(b)
+		iph, p, _, err := pw.r.ReadFrom(b)
 		if err != nil {
 			fmt.Println("Error Reading from connection")
 			return err
 		}
-		fmt.Println("Receive data from multicast group")
 		if iph.Version != ipv4.Version {
 			continue
 		}
@@ -176,13 +186,19 @@ func ReadConnection(r *ipv4.RawConn) error {
 		if ospfh.Version != OSPF_VERSION {
 			continue
 		}
+
+		if ospfh.RouterID == ip2int(pw.myLocalIP) {
+			// Drop messages from ourself
+			continue
+		}
+
 		switch ospfh.Type {
 		case OSPF_TYPE_HELLO:
-			fmt.Printf("Received OSPF Hello")
+			remoteIP := int2ip(ospfh.RouterID)
+			fmt.Printf("Received OSPF Hello from remote Router[%s], My Local IP is [%s]", remoteIP.String(), pw.myLocalIP.String())
 		case OSPF_TYPE_DB_DESCRIPTION:
 		case OSPF_TYPE_LS_REQUEST:
 		case OSPF_TYPE_LS_UPDATE:
-			fmt.Printf("Received OSPF LS UPDATE")
 		case OSPF_TYPE_LS_ACK:
 		}
 	}
