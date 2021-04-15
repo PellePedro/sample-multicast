@@ -1,7 +1,7 @@
 # Multicast Test
 
 ## Description
-A small project to test multicast with sampl OSPF Hello.
+A small project to test multicast with sample OSPF Hello.
 
 ## Configuration
 The name of the container interface might be set with the CONTAINER_INTERFACE
