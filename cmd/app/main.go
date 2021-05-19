@@ -3,29 +3,39 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"flag"
 	"fmt"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
+	"strings"
+	"sync"
 	"time"
+	_ "time"
 
-	"github.com/pellepedro/multicast/pkg/network"
+	"github.com/pellepedro/sample-multicast/pkg/grpc"
+	"github.com/pellepedro/sample-multicast/pkg/pwospf"
+	"github.com/vishvananda/netlink"
 )
 
+const (
+	grpcServerEnv  = "GRPC_SERVER"
+	grpcServerPort = 50051
+)
 
 var (
-	Version = "unknown"
-	Build   = "unknown"
+	Build   = "undefined"
+	Version = "undefined"
 )
 
-var signals = []os.Signal{
-	os.Interrupt,
-	syscall.SIGTERM,
-	syscall.SIGQUIT,
-	syscall.SIGHUP,
-	syscall.SIGSTOP,
-	syscall.SIGCONT,
+func generateClientId() (string, error) {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+	return uuid, nil
 }
 
 func findLocalIP() (net.IP, error) {
@@ -60,44 +70,112 @@ func findLocalIP() (net.IP, error) {
 	}
 }
 
-func main() {
-
-	fmt.Printf("Halo Controller: Version(%s) Build(%s)\n", Version, Build)
-
-	ticker := time.NewTicker(2000 * time.Millisecond)
-	termination := time.NewTimer(20 * time.Minute)
-
-	localIP, err := findLocalIP()
-	_, _ = err, localIP
-
-	fmt.Printf("Found My Local IP[%s]\n", localIP.String())
-
-	con := network.NewPWConnection(localIP)
-	if err := con.OpenBroadcastConnection(); err != nil {
-		panic("Error Open Broadcast Connection")
+func listInterfaces() {
+	l, err := net.Interfaces()
+	if err != nil {
+		panic(err)
 	}
+	for _, f := range l {
+		fmt.Println(f.Name)
+	}
+}
 
-	go con.ReadConnection()
-
-	// Gracefully Handle External Termination
-	sigChan := make(chan os.Signal)
-	signal.Notify(sigChan, signals...)
-
-Loop:
+func main3() {
+	updateCh := make(chan netlink.AddrUpdate)
+	doneCh := make(chan struct{})
+	err := netlink.AddrSubscribe(updateCh, doneCh)
+	if err != nil {
+	}
 	for {
 		select {
-		case t := <-ticker.C:
-			con.WriteConnection(nil)
-			fmt.Println("Sending Hello at ", t)
-		case <-termination.C:
-			ticker.Stop()
-			break Loop
-		case s := <-sigChan:
-			_ = s
-			ticker.Stop()
-			break Loop
+		case update := <-updateCh:
+			// listInterfaces()
+			var updatedLink netlink.Link
+			if update.NewAddr {
+				fmt.Printf("Detected new Link with Address [%s]]\n", update.LinkAddress.String())
+				updatedLink, err = netlink.LinkByIndex(update.LinkIndex)
+				if err == nil {
+					name := updatedLink.Attrs().Name
+					mac := updatedLink.Attrs().HardwareAddr.String()
+					address := update.LinkAddress.String()
+					fmt.Printf("Detected a new interface with Name [%s] MAC[%s] IP[%s]", name, mac, address)
+				}
+			}
 		}
 	}
-	con.CloseConnection()
-	fmt.Printf("Controller Terminated")
+}
+
+func main() {
+	var myIP string
+	flag.StringVar(&myIP, "ip", "192.168.1.1", "Local IP")
+	flag.Parse()
+
+
+	fmt.Printf("My IP is [%s]\n", myIP)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Get grpc Server Endpoint
+	grpcServerEndpoint, found := os.LookupEnv(grpcServerEnv)
+	if !found {
+		errorText := fmt.Sprintf("The environment Variable [ %s ] is not defined", grpcServerEnv)
+		panic(errorText)
+	}
+	_ = grpcServerEndpoint
+
+	clientId, err := generateClientId()
+	if err != nil {
+		panic("Failed to generate Client ID")
+	}
+	fmt.Printf("\n---> Starting Halo, Client[%s] Build[%s] Version[%s]\n", clientId, Build, Version)
+
+	localIP := net.ParseIP(myIP)
+	fmt.Printf("My IP is [%s]\n", localIP.String())
+
+	inCh := make(chan interface{}, 1000)
+	grpcOutCh := make(chan interface{}, 1000)
+	pwospfOutCh := make(chan interface{}, 1000)
+
+	// ------------------------------------------------------------
+	// Start OSPF Multicast Connection
+	mc := pwospf.NewMulticastConnection(localIP, inCh, pwospfOutCh)
+
+	ifaces, _ := net.Interfaces()
+	for _, i := range ifaces {
+		if i.Name == "lo" || ! strings.HasPrefix(i.Name, "halo")   {
+			continue
+		}
+		err = mc.OpenMulticastConnection(i.Name)
+		if err != nil {
+			fmt.Println(err.Error())
+			panic("Failed to open OSPF multicast connection")
+		}
+		// ------------------------------------------------------------
+		mc.Start(i.Name)
+
+    }
+	// ------------------------------------------------------------
+	// Create & Start OSPF Handler
+	ospfh := pwospf.NewPwospfHandler(localIP, inCh, pwospfOutCh, grpcOutCh)
+	ospfh.Start()
+
+	// ------------------------------------------------------------
+	// Setup GRPC Client
+
+	client, errorCh := grpc.NewGrpcClient(inCh, grpcOutCh)
+
+	for client.Connect(grpcServerEndpoint, 50051) != nil {
+		fmt.Println("Failed to connect to grpc server ... retrying")
+		time.Sleep(10 * time.Second)
+	}
+
+	err = client.SubscribeToLinkState(clientId)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to SubscribeToLinkState [%s]", err.Error()))
+	}
+	 _, _ = client, errorCh
+	mc.ListenForDynamicallyAttachedInterfaces()
+	wg.Wait()
+	fmt.Println("<--- Stopping Halo Container")
 }

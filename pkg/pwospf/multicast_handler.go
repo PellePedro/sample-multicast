@@ -1,0 +1,259 @@
+package pwospf
+
+import (
+	"fmt"
+	"github.com/google/gopacket"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/net/ipv4"
+	"net"
+)
+
+type ConnInfo struct {
+	IfName    string
+	Interface *net.Interface
+	RawConn   *ipv4.RawConn
+}
+
+type MulticastConnection struct {
+	myLocalIP net.IP
+	closeFunc func()
+	r         *ipv4.RawConn
+	// Packet Connections keyed on interfaces
+	conInfo    map[string]ConnInfo
+	packetConn map[string]*ipv4.PacketConn
+
+	pwospfInCh  chan interface{}
+	pwospfOutCh chan interface{}
+}
+
+const (
+	ospfPort = 89
+)
+
+var (
+	AllSPFRouters = net.IPv4(224, 0, 0, 5)
+	bindAddress   = net.IPv4(0, 0, 0, 0)
+)
+
+func NewMulticastConnection(localip net.IP, inboundCh, outboundCh chan interface{}) *MulticastConnection {
+	fmt.Printf("NewPWConnection with ip %s\n", localip.String())
+	return &MulticastConnection{
+		myLocalIP:   localip,
+		conInfo:     make(map[string]ConnInfo),
+		packetConn:  make(map[string]*ipv4.PacketConn),
+		pwospfInCh:  inboundCh,
+		pwospfOutCh: outboundCh,
+	}
+}
+
+func (mc *MulticastConnection) ListenForDynamicallyAttachedInterfaces() {
+	fmt.Println("-----> ListenForDynamicallyAttachedInterfaces() -->")
+	updateCh := make(chan netlink.AddrUpdate)
+	doneCh := make(chan struct{})
+	err := netlink.AddrSubscribe(updateCh, doneCh)
+	if err != nil {
+		panic("Failed to subscribe to netlink Addr Updates")
+	}
+	for {
+		select {
+		case update := <-updateCh:
+			fmt.Printf("-----> Detected Link updates [%#v] -->\n", update)
+			var updatedLink netlink.Link
+			if update.NewAddr {
+				updatedLink, err = netlink.LinkByIndex(update.LinkIndex)
+				if err == nil {
+					name := updatedLink.Attrs().Name
+					mac := updatedLink.Attrs().HardwareAddr.String()
+					address := update.LinkAddress.String()
+					fmt.Printf("Detected a new interface with Name [%s] MAC[%s] IP[%s]", name, mac, address)
+					mc.OpenMulticastConnection(name)
+					mc.Start(name)
+				}
+			}
+		}
+	}
+}
+
+func (mc *MulticastConnection) OpenMulticastConnection(interfaceName string) error {
+	c, err := net.ListenPacket("ip4:89", "0.0.0.0") // OSPF for IPv4
+	if err != nil {
+		return err
+	}
+
+	r, err := ipv4.NewRawConn(c)
+	if err != nil {
+		return err
+	}
+	mc.r = r
+
+	fmt.Printf("MulticastConnection() ... Finding interface [%s]\n", interfaceName)
+	ifName, err := net.InterfaceByName(interfaceName)
+	if err != nil {
+		return err
+	}
+
+	allSPFRouters := net.IPAddr{IP: AllSPFRouters}
+	if err := r.JoinGroup(ifName, &allSPFRouters); err != nil {
+		return err
+	}
+
+	err = r.SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
+	if err != nil {
+		return err
+	}
+
+	err = r.SetMulticastInterface(ifName)
+	if err != nil {
+		return err
+	}
+	mc.conInfo[interfaceName] = ConnInfo{IfName: interfaceName, Interface: ifName, RawConn: r}
+
+	return nil
+}
+
+func (pw *MulticastConnection) CloseConnection() {
+	pw.closeFunc()
+}
+
+func (pw *MulticastConnection) mcGroupConnectionReader(interfaceName string) {
+
+	con, found := pw.conInfo[interfaceName]
+	if !found {
+		fmt.Printf("ConnectionReader not found for interface [%s]... Dropping start request\n", interfaceName)
+		return
+	}
+
+	b := make([]byte, 1500)
+	for {
+		fmt.Printf("About to read [%s]\n", interfaceName)
+		iph, payload, cm, err := con.RawConn.ReadFrom(b)
+		if err != nil {
+			fmt.Println("Error Reading from multicast socket connection")
+			return
+		}
+		if iph.Version != ipv4.Version {
+			continue
+		}
+		if iph.Dst.IsMulticast() {
+			if !iph.Dst.Equal(AllSPFRouters) {
+				continue
+			}
+		}
+
+		fmt.Printf("Received message from interface[%s] : cm is [%#v]\n", con.Interface.Name, cm)
+		var pwospf PWOSPF
+		parser := gopacket.NewDecodingLayerParser(LayerTypeOSPF, &pwospf)
+		layrs := make([]gopacket.LayerType, 0, 1)
+
+		if err = parser.DecodeLayers(payload, &layrs); err != nil {
+			fmt.Printf("Failed to Parse Package [%s] \n", err.Error())
+			continue
+		}
+		pw.pwospfInCh <- pwospf
+	}
+}
+
+func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
+	const DiffServCS6 = 0xc0
+	con, found := pw.conInfo[interfaceName]
+	if !found {
+		fmt.Printf("ConnectionReader not found for interface [%s]... Dropping start request\n", interfaceName)
+		return
+	}
+	for {
+		fmt.Printf("About to Write [%s]\n", interfaceName)
+		select {
+		case data := <-pw.pwospfOutCh:
+			pwospf, ok := data.(PWOSPF)
+			if !ok {
+				fmt.Println("Failed to Type assert PWOSP")
+			}
+			buf := gopacket.NewSerializeBuffer()
+			opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+			err := gopacket.SerializeLayers(buf, opts, &pwospf)
+			if err != nil {
+				fmt.Println("Failed to serialize pwospf")
+			}
+			pwospfByteArray := buf.Bytes()
+			iph := &ipv4.Header{}
+			iph.Version = ipv4.Version
+			iph.Len = ipv4.HeaderLen
+			iph.TOS = DiffServCS6
+			iph.TotalLen = ipv4.HeaderLen + len(pwospfByteArray)
+			iph.TTL = 1
+			iph.Protocol = 89
+			iph.Dst = AllSPFRouters
+			fmt.Printf("Sending message on interface[%#v]\n", con.Interface)
+
+			if err = con.RawConn.WriteTo(iph, pwospfByteArray, nil); err != nil {
+				fmt.Printf("Failed to write to multicast group [%s]", err.Error())
+			}
+		}
+	}
+}
+
+func (pw *MulticastConnection) Start(interfaceName string) {
+	go pw.mcGroupConnectionReader(interfaceName)
+	go pw.mcGroupConnectionWriter(interfaceName)
+}
+
+func (pw *MulticastConnection) mcGroupConnectionReader1() {
+	b := make([]byte, 1500)
+	for {
+		iph, payload, cm, err := pw.r.ReadFrom(b)
+		if err != nil {
+			fmt.Println("Error Reading from multicast socket connection")
+			return
+		}
+		if iph.Version != ipv4.Version {
+			continue
+		}
+		if iph.Dst.IsMulticast() {
+			if !iph.Dst.Equal(AllSPFRouters) {
+				continue
+			}
+		}
+
+		fmt.Printf("Received message cm is [%#v]", cm)
+		var pwospf PWOSPF
+		parser := gopacket.NewDecodingLayerParser(LayerTypeOSPF, &pwospf)
+		layrs := make([]gopacket.LayerType, 0, 1)
+
+		if err = parser.DecodeLayers(payload, &layrs); err != nil {
+			fmt.Printf("Failed to Parse Package [%s] \n", err.Error())
+			continue
+		}
+		pw.pwospfInCh <- pwospf
+	}
+}
+func (pw *MulticastConnection) mcGroupConnectionWriter1() {
+	const DiffServCS6 = 0xc0
+	for {
+		select {
+		case data := <-pw.pwospfOutCh:
+			pwospf, ok := data.(PWOSPF)
+			if !ok {
+				fmt.Println("Failed to Type assert PWOSP")
+			}
+			buf := gopacket.NewSerializeBuffer()
+			opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+			err := gopacket.SerializeLayers(buf, opts, &pwospf)
+			if err != nil {
+				fmt.Println("Failed to serialize pwospf")
+			}
+			pwospfByteArray := buf.Bytes()
+			iph := &ipv4.Header{}
+			iph.Version = ipv4.Version
+			iph.Len = ipv4.HeaderLen
+			iph.TOS = DiffServCS6
+			iph.TotalLen = ipv4.HeaderLen + len(pwospfByteArray)
+			iph.TTL = 1
+			iph.Protocol = 89
+			iph.Dst = AllSPFRouters
+
+			if err = pw.r.WriteTo(iph, pwospfByteArray, nil); err != nil {
+				fmt.Printf("Failed to write to multicast group [%s]", err.Error())
+			}
+		}
+	}
+}
