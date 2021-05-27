@@ -134,9 +134,9 @@ type RouterV2 struct {
 
 // RouterLSAV2 is the struct from RFC 2328  A.4.2.
 type RouterLSAV2 struct {
-	Flags   uint8
-	Links   uint16
-	Routers []RouterV2
+	Flags   uint8      //  1 byte
+	Links   uint16     //  2 bytes
+	Routers []RouterV2 //  11 bytes per entry
 }
 
 // Router extends RouterLSA
@@ -157,14 +157,14 @@ type RouterLSA struct {
 
 // LSAheader is the struct from RFC 5340  A.4.2 and RFC 2328 A.4.1.
 type LSAheader struct {
-	LSAge       uint16
-	LSType      uint16
-	LinkStateID uint32
-	AdvRouter   uint32
-	LSSeqNumber uint32
-	LSChecksum  uint16
-	Length      uint16
-	LSOptions   uint8
+	LSAge       uint16 // Byte[ 0 :  2]
+	LSType      uint16 // Byte[ 2 :  4]
+	LinkStateID uint32 // Byte[ 4 :  8]
+	AdvRouter   uint32 // Byte[ 8 : 12]
+	LSSeqNumber uint32 // Byte[12 : 16]
+	LSChecksum  uint16 // Byte[16 : 18]
+	Length      uint16 // Byte[18 : 20]
+	LSOptions   uint8  // Byte[20 : 21] Total 21 bytes
 }
 
 // LSA links LSAheader with the structs from RFC 5340  A.4.
@@ -214,8 +214,9 @@ type HelloPkgV2 struct {
 }
 
 //PWOSPF extend the OSPF head with version 2 specific fields
-type PWOSPF struct {
+type PWOSPF struct { // LEngth 24 + Content
 	layers.BaseLayer
+	Intf           string
 	Version        uint8
 	Type           OSPFType
 	PacketLength   uint16
@@ -506,33 +507,35 @@ func (ospf *PWOSPF) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Serial
 
 		 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                  Header (len 24 bytes                         |   byte[0:23]
+		|                  Header (len 24 bytes                         |   byte[0:24]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|            LS age             |     Options   |       1       |   byte[24:27]
+		|                       Number of LSA                           |   byte[24:28]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                        Link State ID                          |   byte[28:31]
+		|            LS age             |     Options   |       1       |   byte[28:32]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                     Advertising Router                        |   byte[32:35]
+		|                        Link State ID                          |   byte[32:36]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                     LS sequence number                        |   byte[36:39]
+		|                     Advertising Router                        |   byte[36:40]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|         LS checksum           |             length            |   byte[40:43]
+		|                     LS sequence number                        |   byte[40:44]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|    0    |V|E|B|        0      |            # links            |   byte[46:49]
+		|         LS checksum           |             length            |   byte[44:48]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                          Link ID                              |   byte[50:53]
+		|    0    |V|E|B|        0      |            # links            |   byte[48:52]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                         Link Data                             |   byte[54:57]
+		|                          Link ID                              |   byte[52:56]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|     Type      |     # TOS     |            metric             |   byte[58:53]
+		|                         Link Data                             |   byte[56:60]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                              ...                              |   byte[50:53]
+		|     Type      |     # TOS     |            metric             |   byte[60:64]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|      TOS      |        0      |          TOS  metric          |   byte[50:53]
+		|                              ...                              |   byte[64:68]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                          Link ID                              |   byte[50:53]
+		|      TOS      |        0      |          TOS  metric          |   byte[68:72]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		|                         Link Data                             |   byte[50:53]
+		|                          Link ID                              |   byte[72:76]
+		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		|                         Link Data                             |   byte[76:80]
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		|                              ...                              |
 		*/
@@ -546,14 +549,27 @@ func (ospf *PWOSPF) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Serial
 				_ = i
 				_ = lsaType
 
-				binary.BigEndian.PutUint16(bytes[24:26], lsa.LSAge)
-				bytes[26] = lsa.LSOptions
-				bytes[27] = byte(lsa.LSType)
-				binary.BigEndian.PutUint32(bytes[28:32], lsa.LinkStateID)
-				binary.BigEndian.PutUint32(bytes[32:36], lsa.AdvRouter)
-				binary.BigEndian.PutUint32(bytes[36:40], lsa.LSSeqNumber)
-				binary.BigEndian.PutUint16(bytes[40:42], lsa.LSChecksum)
-				binary.BigEndian.PutUint16(bytes[42:44], lsa.Length)
+				// Header 20 + routes * 12
+				binary.BigEndian.PutUint32(bytes[24:28], lsUpdate.NumOfLSAs)
+
+				binary.BigEndian.PutUint16(bytes[28:30], lsa.LSAge)
+				bytes[30] = lsa.LSOptions
+				bytes[31] = byte(lsa.LSType)
+				binary.BigEndian.PutUint32(bytes[32:36], lsa.LinkStateID)
+				binary.BigEndian.PutUint32(bytes[36:40], lsa.AdvRouter)
+				binary.BigEndian.PutUint32(bytes[40:44], lsa.LSSeqNumber)
+				binary.BigEndian.PutUint16(bytes[44:46], lsa.LSChecksum)
+				binary.BigEndian.PutUint16(bytes[46:48], lsa.Length)
+
+				binary.BigEndian.PutUint16(bytes[50:52], lsaType.Links)
+				entry := 0
+				for _, r := range lsaType.Routers {
+					binary.BigEndian.PutUint32(bytes[entry+52:entry+56], r.LinkID)
+					binary.BigEndian.PutUint32(bytes[entry+56:entry+60], r.LinkData)
+					bytes[entry+60] = r.Type
+					binary.BigEndian.PutUint16(bytes[entry+62:entry+64], r.Metric)
+					entry += 12
+				}
 			}
 		}
 

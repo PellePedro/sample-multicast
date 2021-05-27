@@ -149,6 +149,7 @@ func (pw *MulticastConnection) mcGroupConnectionReader(interfaceName string) {
 			fmt.Printf("Failed to Parse Package [%s] \n", err.Error())
 			continue
 		}
+		pwospf.Intf = interfaceName
 		pw.pwospfInCh <- pwospf
 	}
 }
@@ -195,65 +196,4 @@ func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
 func (pw *MulticastConnection) Start(interfaceName string) {
 	go pw.mcGroupConnectionReader(interfaceName)
 	go pw.mcGroupConnectionWriter(interfaceName)
-}
-
-func (pw *MulticastConnection) mcGroupConnectionReader1() {
-	b := make([]byte, 1500)
-	for {
-		iph, payload, cm, err := pw.r.ReadFrom(b)
-		if err != nil {
-			fmt.Println("Error Reading from multicast socket connection")
-			return
-		}
-		if iph.Version != ipv4.Version {
-			continue
-		}
-		if iph.Dst.IsMulticast() {
-			if !iph.Dst.Equal(AllSPFRouters) {
-				continue
-			}
-		}
-
-		fmt.Printf("Received message cm is [%#v]", cm)
-		var pwospf PWOSPF
-		parser := gopacket.NewDecodingLayerParser(LayerTypeOSPF, &pwospf)
-		layrs := make([]gopacket.LayerType, 0, 1)
-
-		if err = parser.DecodeLayers(payload, &layrs); err != nil {
-			fmt.Printf("Failed to Parse Package [%s] \n", err.Error())
-			continue
-		}
-		pw.pwospfInCh <- pwospf
-	}
-}
-func (pw *MulticastConnection) mcGroupConnectionWriter1() {
-	const DiffServCS6 = 0xc0
-	for {
-		select {
-		case data := <-pw.pwospfOutCh:
-			pwospf, ok := data.(PWOSPF)
-			if !ok {
-				fmt.Println("Failed to Type assert PWOSP")
-			}
-			buf := gopacket.NewSerializeBuffer()
-			opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-			err := gopacket.SerializeLayers(buf, opts, &pwospf)
-			if err != nil {
-				fmt.Println("Failed to serialize pwospf")
-			}
-			pwospfByteArray := buf.Bytes()
-			iph := &ipv4.Header{}
-			iph.Version = ipv4.Version
-			iph.Len = ipv4.HeaderLen
-			iph.TOS = DiffServCS6
-			iph.TotalLen = ipv4.HeaderLen + len(pwospfByteArray)
-			iph.TTL = 1
-			iph.Protocol = 89
-			iph.Dst = AllSPFRouters
-
-			if err = pw.r.WriteTo(iph, pwospfByteArray, nil); err != nil {
-				fmt.Printf("Failed to write to multicast group [%s]", err.Error())
-			}
-		}
-	}
 }
