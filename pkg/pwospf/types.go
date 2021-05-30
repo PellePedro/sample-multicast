@@ -30,8 +30,12 @@ func (r *LinkStateBuilder) AddRouterLSA(linkId int, data int, metric int) {
 	r.nbr = append(r.nbr, lsa)
 }
 
-func (r *LinkStateBuilder) setRouterID(id net.IP) {
+func (r *LinkStateBuilder) SetRouterID(id net.IP) {
 	r.routerId = id
+}
+
+func (r *LinkStateBuilder) SetSeq(seq uint32) {
+	r.header.LSSeqNumber = seq
 }
 
 func (r *LinkStateBuilder) BuildRequest() PWOSPF {

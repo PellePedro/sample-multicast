@@ -214,9 +214,9 @@ type HelloPkgV2 struct {
 }
 
 //PWOSPF extend the OSPF head with version 2 specific fields
-type PWOSPF struct { // LEngth 24 + Content
+type PWOSPF struct { // Length 24 + Content
 	layers.BaseLayer
-	Intf           string
+	Port           Port
 	Version        uint8
 	Type           OSPFType
 	PacketLength   uint16

@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 	_ "time"
 
 	"github.com/pellepedro/sample-multicast/pkg/grpc"
+	"github.com/pellepedro/sample-multicast/pkg/halo"
 	"github.com/pellepedro/sample-multicast/pkg/pwospf"
 	"github.com/vishvananda/netlink"
 )
@@ -110,7 +110,6 @@ func main() {
 	flag.StringVar(&myIP, "ip", "192.168.1.1", "Local IP")
 	flag.Parse()
 
-
 	fmt.Printf("My IP is [%s]\n", myIP)
 
 	var wg sync.WaitGroup
@@ -140,24 +139,10 @@ func main() {
 	// ------------------------------------------------------------
 	// Start OSPF Multicast Connection
 	mc := pwospf.NewMulticastConnection(localIP, inCh, pwospfOutCh)
-
-	ifaces, _ := net.Interfaces()
-	for _, i := range ifaces {
-		if i.Name == "lo" || ! strings.HasPrefix(i.Name, "halo")   {
-			continue
-		}
-		err = mc.OpenMulticastConnection(i.Name)
-		if err != nil {
-			fmt.Println(err.Error())
-			panic("Failed to open OSPF multicast connection")
-		}
-		// ------------------------------------------------------------
-		mc.Start(i.Name)
-
-    }
+	mc.StartMulticastOnStaticInterfaces()
 	// ------------------------------------------------------------
 	// Create & Start OSPF Handler
-	ospfh := pwospf.NewPwospfHandler(localIP, inCh, pwospfOutCh, grpcOutCh)
+	ospfh := halo.NewPwospfHandler(localIP, inCh, pwospfOutCh, grpcOutCh)
 	ospfh.Start()
 
 	// ------------------------------------------------------------
@@ -174,7 +159,7 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to SubscribeToLinkState [%s]", err.Error()))
 	}
-	 _, _ = client, errorCh
+	_, _ = client, errorCh
 	mc.ListenForDynamicallyAttachedInterfaces()
 	wg.Wait()
 	fmt.Println("<--- Stopping Halo Container")

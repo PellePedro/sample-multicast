@@ -2,11 +2,28 @@ package pwospf
 
 import (
 	"fmt"
+	"net"
+
 	"github.com/google/gopacket"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/net/ipv4"
-	"net"
 )
+
+type State int
+
+const (
+	UP State = iota
+)
+
+type Port struct {
+	State       State
+	Index       int
+	IfName      string
+	Ip          net.IP
+	Cidr        string
+	NetworkCidr string
+	Mac         net.HardwareAddr
+}
 
 type ConnInfo struct {
 	IfName    string
@@ -46,6 +63,47 @@ func NewMulticastConnection(localip net.IP, inboundCh, outboundCh chan interface
 	}
 }
 
+func createPort(state State, index int, ifName string, ip net.IP, ipCIDR string, networkCIDR string, mac net.HardwareAddr) Port {
+	port := Port{
+		State:       state,
+		Index:       index,
+		IfName:      ifName,
+		Ip:          ip,
+		Cidr:        ipCIDR,
+		NetworkCidr: networkCIDR,
+		Mac:         mac,
+	}
+	fmt.Printf("Detected a new interface and port [%#v]\n", port)
+	return port
+}
+
+func (mc *MulticastConnection) StartMulticastOnStaticInterfaces() {
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range interfaces {
+		if f.Flags&net.FlagBroadcast != net.FlagBroadcast {
+			continue
+		}
+		addr, _ := f.Addrs()
+		switch a := addr[0].(type) {
+		case *net.IPNet:
+			cidr := a.String() // e.g 192.168.1.110/24
+			ip, ipnet, _ := net.ParseCIDR(cidr)
+			index := f.Index
+			// cidr := a.String() // e.g. "192.168.1.100/24"
+			// ipStr := ip.String()   // e.g. 192.168.1.100
+			port := createPort(UP, index, f.Name, ip, cidr, ipnet.String(), f.HardwareAddr)
+			mc.OpenMulticastConnection(port.IfName)
+			mc.Start(port)
+		default:
+			fmt.Printf("========> ProcessStaticInterfaces() with Unexpected Addrs Type (%#t)\n", a)
+		}
+	}
+}
+
 func (mc *MulticastConnection) ListenForDynamicallyAttachedInterfaces() {
 	fmt.Println("-----> ListenForDynamicallyAttachedInterfaces() -->")
 	updateCh := make(chan netlink.AddrUpdate)
@@ -57,17 +115,18 @@ func (mc *MulticastConnection) ListenForDynamicallyAttachedInterfaces() {
 	for {
 		select {
 		case update := <-updateCh:
-			fmt.Printf("-----> Detected Link updates [%#v] -->\n", update)
+			fmt.Printf("========> Detected Link updates [%#v] -->\n", update)
 			var updatedLink netlink.Link
 			if update.NewAddr {
 				updatedLink, err = netlink.LinkByIndex(update.LinkIndex)
 				if err == nil {
 					name := updatedLink.Attrs().Name
-					mac := updatedLink.Attrs().HardwareAddr.String()
-					address := update.LinkAddress.String()
-					fmt.Printf("Detected a new interface with Name [%s] MAC[%s] IP[%s]", name, mac, address)
+					cidr := update.LinkAddress.String()
+					ip, ipnet, _ := net.ParseCIDR(cidr)
+					index := update.LinkIndex
+					port := createPort(UP, index, name, ip, cidr, ipnet.String(), updatedLink.Attrs().HardwareAddr)
 					mc.OpenMulticastConnection(name)
-					mc.Start(name)
+					mc.Start(port)
 				}
 			}
 		}
@@ -115,8 +174,9 @@ func (pw *MulticastConnection) CloseConnection() {
 	pw.closeFunc()
 }
 
-func (pw *MulticastConnection) mcGroupConnectionReader(interfaceName string) {
+func (pw *MulticastConnection) mcGroupConnectionReader(port Port) {
 
+	interfaceName := port.IfName
 	con, found := pw.conInfo[interfaceName]
 	if !found {
 		fmt.Printf("ConnectionReader not found for interface [%s]... Dropping start request\n", interfaceName)
@@ -149,7 +209,7 @@ func (pw *MulticastConnection) mcGroupConnectionReader(interfaceName string) {
 			fmt.Printf("Failed to Parse Package [%s] \n", err.Error())
 			continue
 		}
-		pwospf.Intf = interfaceName
+		pwospf.Port = port
 		pw.pwospfInCh <- pwospf
 	}
 }
@@ -193,7 +253,8 @@ func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
 	}
 }
 
-func (pw *MulticastConnection) Start(interfaceName string) {
-	go pw.mcGroupConnectionReader(interfaceName)
-	go pw.mcGroupConnectionWriter(interfaceName)
+func (pw *MulticastConnection) Start(port Port) {
+	pw.pwospfInCh <- port
+	go pw.mcGroupConnectionReader(port)
+	go pw.mcGroupConnectionWriter(port.IfName)
 }
