@@ -1,7 +1,5 @@
 package pwospf
 
-import "net"
-
 type HelloBuilder struct {
 	RouterId    uint32
 	InterfaceID uint32
@@ -10,7 +8,7 @@ type HelloBuilder struct {
 
 func NewHello() *HelloBuilder {
 	return &HelloBuilder{
-		Neighbors: make([]uint32,0),
+		Neighbors: make([]uint32, 0),
 	}
 }
 func (r *HelloBuilder) SetRouterID(id uint32) {
@@ -38,25 +36,25 @@ func (r *HelloBuilder) BuildRequest() PWOSPF {
 }
 
 type LinkStateBuilder struct {
-	routerId net.IP
-	length   int
-	header   LSAheader
+	RouterId uint32
+	Length   uint32
+	Header   LSAheader
 
-	links int
-	flags int
+	Links uint32
+	Flags int
 	nbr   []RouterV2
 }
 
 func NewLinkstateUpdate(h LSAheader) *LinkStateBuilder {
 	return &LinkStateBuilder{
-		length: 20,
-		header: h,
+		Length: 20,
+		Header: h,
 		nbr:    make([]RouterV2, 2),
 	}
 }
 
-func (r *LinkStateBuilder) AddRouterLSA(linkId int, data int, metric int) {
-	r.length = r.length + 12
+func (r *LinkStateBuilder) AddRouterLSA(linkId uint32, data uint32, metric int) {
+	r.Length = r.Length + 12
 	lsa := RouterV2{
 		LinkID:   uint32(linkId),
 		LinkData: uint32(data),
@@ -65,17 +63,17 @@ func (r *LinkStateBuilder) AddRouterLSA(linkId int, data int, metric int) {
 	r.nbr = append(r.nbr, lsa)
 }
 
-func (r *LinkStateBuilder) SetRouterID(id net.IP) {
-	r.routerId = id
+func (r *LinkStateBuilder) SetRouterID(id uint32) {
+	r.RouterId = id
 }
 
 func (r *LinkStateBuilder) SetSeq(seq uint32) {
-	r.header.LSSeqNumber = seq
+	r.Header.LSSeqNumber = seq
 }
 
 func (r *LinkStateBuilder) BuildRequest() PWOSPF {
 	ospf := PWOSPF{Type: OSPFLinkStateUpdate, Content: LSUpdate{}}
-	ospf.RouterID = uint32(r.routerId[12])<<24 | uint32(r.routerId[13])<<16 | uint32(r.routerId[14])<<8 | uint32(r.routerId[15])
+	ospf.RouterID = r.RouterId
 
 	noRouterLSAs := len(r.nbr)
 	if noRouterLSAs > 0 {

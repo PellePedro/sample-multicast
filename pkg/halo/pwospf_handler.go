@@ -166,21 +166,53 @@ func (handler *PwosfpHandler) handleHello(req pwospf.PWOSPF) {
 		fmt.Printf("Neighboring Router %s\n", IPFromUint32toString(nbr.rid))
 	}
 	fmt.Println("=======================================================")
+	handler.sendLinkStateUpdate()
 }
 
 func (handler *PwosfpHandler) sendLinkStateUpdate() {
 	builder := pwospf.LinkStateBuilder{}
 	nbrs := handler.haloRouter.GetNeighbors()
-
+	for _, nbr := range nbrs {
+		fmt.Printf("LSA Neighboring Router %s\n", IPFromUint32toString(nbr.rid))
+		builder.AddRouterLSA(nbr.rid, 2, 10)
+	}
 	_ = nbrs
-	builder.AddRouterLSA(1, 2, 10)
-	builder.AddRouterLSA(1, 4, 20)
-	builder.SetRouterID(handler.myIP)
+
+	builder.SetRouterID(IPFromNetIPToUint32(handler.myIP))
 	ospf := builder.BuildRequest()
 	fmt.Println("=> Sending LinkStateUpdate")
 	handler.ospfOutCh <- ospf
 }
 
+func (handler *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
+	router := handler.haloRouter
+	senderIP := make(net.IP, 4)
+	binary.BigEndian.PutUint32(senderIP, req.RouterID)
+	fmt.Printf("... => I'm Router [%s]: Received OSPF Link State Update Message from Router [%s]\n", handler.myIP.String(), senderIP.String())
+
+	// get LSDB entry for sender
+	// if lsa seq is valid
+	// forwardLSUpdate
+
+	if lsu, ok := req.Content.(pwospf.LSUpdate); ok {
+		n := int(lsu.NumOfLSAs)
+		for i := 0; i < n; i++ {
+			lsa := lsu.LSAs[i]
+			if rlsas, rok := lsa.Content.(pwospf.RouterLSAV2); rok {
+				for i, val := range rlsas.Routers {
+					fmt.Printf("========> Received Rouer lsa from Router [%s] index [%d] [%#v] Metric[%d] \n", senderIP.String(), i, IPFromUint32toString(val.LinkID), val.Metric)
+				}
+			}
+		}
+	}
+
+	modified := router.SetLSDB()
+	if modified {
+		router.RecomputeRoute()
+	}
+}
+
+/*
 func (handler *PwosfpHandler) GetHalMetrics() {
 
 	handler.h.GetFlows(
@@ -213,31 +245,4 @@ func (handler *PwosfpHandler) GetHalMetrics() {
 	fmt.Println("=> Sending LinkStateUpdate")
 	handler.ospfOutCh <- ospf
 }
-
-func (handler *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
-	router := handler.haloRouter
-	senderIP := make(net.IP, 4)
-	binary.BigEndian.PutUint32(senderIP, req.RouterID)
-	fmt.Printf("... => I'm Router [%s]: Received OSPF Link State Update Message from Router [%s]\n", handler.myIP.String(), senderIP.String())
-
-	// get LSDB entry for sender
-	// if lsa seq is valid
-	// forwardLSUpdate
-
-	if lsu, ok := req.Content.(pwospf.LSUpdate); ok {
-		n := int(lsu.NumOfLSAs)
-		for i := 0; i < n; i++ {
-			lsa := lsu.LSAs[i]
-			if rlsas, rok := lsa.Content.(pwospf.RouterLSAV2); rok {
-				for i, val := range rlsas.Routers {
-					fmt.Printf("========> Received Rouer lsa from Router [%s] index [%d] [%#v] \n", senderIP.String(), i, val)
-				}
-			}
-		}
-	}
-
-	modified := router.SetLSDB()
-	if modified {
-		router.RecomputeRoute()
-	}
-}
+*/
