@@ -32,7 +32,6 @@ type ConnInfo struct {
 }
 
 type MulticastConnection struct {
-	myLocalIP net.IP
 	closeFunc func()
 	r         *ipv4.RawConn
 	// Packet Connections keyed on interfaces
@@ -52,10 +51,8 @@ var (
 	bindAddress   = net.IPv4(0, 0, 0, 0)
 )
 
-func NewMulticastConnection(localip net.IP, inboundCh, outboundCh chan interface{}) *MulticastConnection {
-	fmt.Printf("NewPWConnection with ip %s\n", localip.String())
+func NewMulticastConnection( inboundCh, outboundCh chan interface{}) *MulticastConnection {
 	return &MulticastConnection{
-		myLocalIP:   localip,
 		conInfo:     make(map[string]ConnInfo),
 		packetConn:  make(map[string]*ipv4.PacketConn),
 		pwospfInCh:  inboundCh,
@@ -185,8 +182,8 @@ func (pw *MulticastConnection) mcGroupConnectionReader(port Port) {
 
 	b := make([]byte, 1500)
 	for {
-		fmt.Printf("About to read [%s]\n", interfaceName)
 		iph, payload, cm, err := con.RawConn.ReadFrom(b)
+		_ = cm
 		if err != nil {
 			fmt.Println("Error Reading from multicast socket connection")
 			return
@@ -200,7 +197,6 @@ func (pw *MulticastConnection) mcGroupConnectionReader(port Port) {
 			}
 		}
 
-		fmt.Printf("Received message from interface[%s] : cm is [%#v]\n", con.Interface.Name, cm)
 		var pwospf PWOSPF
 		parser := gopacket.NewDecodingLayerParser(LayerTypeOSPF, &pwospf)
 		layrs := make([]gopacket.LayerType, 0, 1)
@@ -244,7 +240,7 @@ func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
 			iph.TTL = 1
 			iph.Protocol = 89
 			iph.Dst = AllSPFRouters
-			fmt.Printf("Sending message on interface[%#v]\n", con.Interface)
+			//fmt.Printf("Sending message on interface[%#v]\n", con.Interface)
 
 			if err = con.RawConn.WriteTo(iph, pwospfByteArray, nil); err != nil {
 				fmt.Printf("Failed to write to multicast group [%s]", err.Error())

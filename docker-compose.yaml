@@ -2,30 +2,16 @@ version: "3.8"  # optional since v1.27.0
 services:
   halo1:
     container_name: halo1
-    hostname: halo1
     image: halo
-    command: -ip=10.10.0.1
-    environment:
-    - GRPC_SERVER=grpc-server
-    - HELLO_INTERVAL=5
-    - OSPF_IF_PREFIX=halo
   halo2:
     container_name: halo2
-    hostname: halo2
     image: halo
-    command: -ip=10.10.0.2
-    environment:
-    - GRPC_SERVER=grpc-server
-    - HELLO_INTERVAL=5
-    - OSPF_IF_PREFIX=halo
   halo3:
     container_name: halo3
-    hostname: halo3
     image: halo
-    command: -ip=10.10.2.3
-    environment:
-    - GRPC_SERVER=grpc-server
-    - HELLO_INTERVAL=5
-    - OSPF_IF_PREFIX=halo
-  grpc-server:
-    image: grpc-server
+  halo4:
+    container_name: halo4
+    image: halo
+  halo5:
+    container_name: halo5
+    image: halo

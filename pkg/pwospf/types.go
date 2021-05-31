@@ -2,6 +2,41 @@ package pwospf
 
 import "net"
 
+type HelloBuilder struct {
+	RouterId    uint32
+	InterfaceID uint32
+	Neighbors   []uint32
+}
+
+func NewHello() *HelloBuilder {
+	return &HelloBuilder{
+		Neighbors: make([]uint32,0),
+	}
+}
+func (r *HelloBuilder) SetRouterID(id uint32) {
+	r.RouterId = id
+}
+
+func (r *HelloBuilder) AddNeighBor(nbr uint32) {
+	r.Neighbors = append(r.Neighbors, nbr)
+}
+
+func (r *HelloBuilder) BuildRequest() PWOSPF {
+
+	var length uint16
+	length = 44
+	hello := HelloPkgV2{}
+
+	for _, nbr := range r.Neighbors {
+		hello.NeighborID = append(hello.NeighborID, nbr)
+		length += 4
+	}
+	ospf := PWOSPF{Type: OSPFHello, PacketLength: 44, Content: hello}
+	ospf.RouterID = r.RouterId
+	ospf.PacketLength = length
+	return ospf
+}
+
 type LinkStateBuilder struct {
 	routerId net.IP
 	length   int

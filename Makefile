@@ -25,14 +25,6 @@ build-halo:	## - Building Halo Container
 		--build-arg build=$(BUILD) --build-arg version=$(VERSION) \
 		-f Dockerfile .
 
-build-grpc-server:	## - Building GRPC Server
-	@printf "\033[32m\xE2\x9c\x93 Buildingi Mock GRPC Server ${REGISTRY}/${BINARY} \033[0m"
-	@DOCKER_BUILDKIT=1 docker build \
-		-t ${GRPC_IMAGE}:latest \
-		-t ${GRPC_IMAGE}:${VERSION} \
-		--build-arg build=$(BUILD) --build-arg version=$(VERSION) \
-		-f Dockerfile.grpc .
-
 run-simulation: build-grpc-server build-halo ## - Run Simulation
 	@printf "\033[32m\xE2\x9c\x93 Running Simulation \033[0m\n"
 	@docker-compose up
