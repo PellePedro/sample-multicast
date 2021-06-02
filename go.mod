@@ -9,6 +9,6 @@ require (
 	golang.org/x/net v0.0.0-20210525063256-abc453219eb5
 )
 
-replace github.com/drivenets/vmw_tsf/tsf-hal => ../tsf-hal
+replace github.com/drivenets/vmw_tsf/tsf-hal => ../vmw_tsf/tsf-hal
 
-replace github.com/drivenets/vmw_tsf/tsf-twamp => ../tsf-twamp
+replace github.com/drivenets/vmw_tsf/tsf-twamp => ../vmw_tsf/tsf-twamp
