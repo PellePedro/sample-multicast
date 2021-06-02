@@ -3,6 +3,8 @@ package pwospf
 import (
 	"fmt"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/vishvananda/netlink"
@@ -40,6 +42,7 @@ type MulticastConnection struct {
 
 	pwospfInCh  chan interface{}
 	pwospfOutCh chan interface{}
+	fanoutCh    map[string]chan interface{}
 }
 
 const (
@@ -51,12 +54,38 @@ var (
 	bindAddress   = net.IPv4(0, 0, 0, 0)
 )
 
-func NewMulticastConnection( inboundCh, outboundCh chan interface{}) *MulticastConnection {
-	return &MulticastConnection{
+func NewMulticastConnection(inboundCh, outboundCh chan interface{}) *MulticastConnection {
+	mc := &MulticastConnection{
 		conInfo:     make(map[string]ConnInfo),
 		packetConn:  make(map[string]*ipv4.PacketConn),
 		pwospfInCh:  inboundCh,
 		pwospfOutCh: outboundCh,
+		fanoutCh:    make(map[string]chan interface{}),
+	}
+
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		select {
+		case <-ticker.C:
+			go mc.SendOnMultiChannel()
+		}
+	}()
+	return mc
+}
+
+func (mc MulticastConnection) SendOnMultiChannel() {
+	fmt.Println("Started Multichannel Fan Out")
+	for {
+		select {
+		case msg := <- mc.pwospfOutCh:
+			for key, ch := range mc.fanoutCh {
+				if ch != nil {
+					fmt.Printf("Sending output on channel %s\n", key)
+					data := msg
+					ch <- data
+				}
+			}
+		}
 	}
 }
 
@@ -82,6 +111,10 @@ func (mc *MulticastConnection) StartMulticastOnStaticInterfaces() {
 	}
 	for _, f := range interfaces {
 		if f.Flags&net.FlagBroadcast != net.FlagBroadcast {
+			continue
+		}
+		if !strings.HasPrefix(f.Name, "halo") {
+			fmt.Printf("Interface [%s] does not match prefix halo ... skipping", f.Name)
 			continue
 		}
 		addr, _ := f.Addrs()
@@ -118,6 +151,10 @@ func (mc *MulticastConnection) ListenForDynamicallyAttachedInterfaces() {
 				updatedLink, err = netlink.LinkByIndex(update.LinkIndex)
 				if err == nil {
 					name := updatedLink.Attrs().Name
+					if !strings.HasPrefix(name, "halo") {
+						fmt.Printf("Interface [%s] does not match prefix halo ... skipping", name)
+						continue
+					}
 					cidr := update.LinkAddress.String()
 					ip, ipnet, _ := net.ParseCIDR(cidr)
 					index := update.LinkIndex
@@ -210,7 +247,7 @@ func (pw *MulticastConnection) mcGroupConnectionReader(port Port) {
 	}
 }
 
-func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
+func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string, outCh chan interface{}) {
 	const DiffServCS6 = 0xc0
 	con, found := pw.conInfo[interfaceName]
 	if !found {
@@ -220,7 +257,7 @@ func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
 	for {
 		fmt.Printf("About to Write [%s]\n", interfaceName)
 		select {
-		case data := <-pw.pwospfOutCh:
+		case data := <-outCh:
 			pwospf, ok := data.(PWOSPF)
 			if !ok {
 				fmt.Println("Failed to Type assert PWOSP")
@@ -252,5 +289,9 @@ func (pw *MulticastConnection) mcGroupConnectionWriter(interfaceName string) {
 func (pw *MulticastConnection) Start(port Port) {
 	pw.pwospfInCh <- port
 	go pw.mcGroupConnectionReader(port)
-	go pw.mcGroupConnectionWriter(port.IfName)
+
+	outCh := make(chan interface{})
+	pw.fanoutCh[port.IfName] = outCh
+
+	go pw.mcGroupConnectionWriter(port.IfName, outCh)
 }

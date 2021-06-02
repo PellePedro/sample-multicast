@@ -15,6 +15,7 @@ func IPFromUint32toNetIP(ipUint32 uint32) net.IP {
 	binary.BigEndian.PutUint32(ip, ipUint32)
 	return ip
 }
+
 func IPFromNetIPToUint32(ip net.IP) uint32 {
 	return uint32(ip[12])<<24 | uint32(ip[13])<<16 | uint32(ip[14])<<8 | uint32(ip[15])
 }

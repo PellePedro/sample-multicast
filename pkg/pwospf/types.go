@@ -53,12 +53,12 @@ func NewLinkstateUpdate(h LSAheader) *LinkStateBuilder {
 	}
 }
 
-func (r *LinkStateBuilder) AddRouterLSA(linkId uint32, data uint32, metric int) {
+func (r *LinkStateBuilder) AddRouterLSA(linkId uint32, data uint32, metric uint16) {
 	r.Length = r.Length + 12
 	lsa := RouterV2{
-		LinkID:   uint32(linkId),
-		LinkData: uint32(data),
-		Metric:   uint16(metric),
+		LinkID:   linkId,
+		LinkData: data,
+		Metric:   metric,
 	}
 	r.nbr = append(r.nbr, lsa)
 }

@@ -3,6 +3,7 @@ package halo
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -40,6 +41,12 @@ type FlowKey struct {
 	SteerLink string
 }
 
+type LinkState struct {
+	SourceId uint32
+	RemoteId uint32
+	IfName   string
+	TxGain   uint16
+}
 type HalClient struct {
 	counter    int
 	h          hal.DnHal
@@ -48,7 +55,7 @@ type HalClient struct {
 }
 
 type PwosfpHandler struct {
-	haloRouter *HaloRouter
+	router     *Router
 	myIP       net.IP
 	inCh       chan interface{}
 	ospfOutCh  chan interface{}
@@ -60,14 +67,15 @@ type PwosfpHandler struct {
 
 func NewPwospfHandler(ospfInboundCh, outboundCh chan interface{}) *PwosfpHandler {
 	return &PwosfpHandler{
-		haloRouter: NewHaloRouter(),
-		inCh:       ospfInboundCh,
-		ospfOutCh:  outboundCh,
+		router:    NewRouter(),
+		inCh:      ospfInboundCh,
+		ospfOutCh: outboundCh,
 	}
 }
 
 var mCastNetworkActive = false
 var ports = make(map[string]pwospf.Port)
+var linkstate = make(map[string]*LinkState)
 
 func (handler *PwosfpHandler) processInbounds() {
 	go func() {
@@ -78,13 +86,12 @@ func (handler *PwosfpHandler) processInbounds() {
 				case pwospf.Port:
 					if mCastNetworkActive == false {
 						// pick RouterId from first interface
-						fmt.Printf("Setting own IP to [%s]", message.Ip)
+						fmt.Printf("Setting own IP to [%s]\n", message.Ip)
 						handler.myIP = message.Ip
 					}
 					mCastNetworkActive = true
 					fmt.Printf("Received Network Active [%#v]\n", message)
 					ports[message.IfName] = message
-					//handler.GetHalMetrics()
 				case pwospf.PWOSPF:
 					senderIP := make(net.IP, 4)
 					binary.BigEndian.PutUint32(senderIP, message.RouterID)
@@ -116,133 +123,126 @@ func (handler *PwosfpHandler) Start() {
 					fmt.Println("Time to Send Hello but network not ready")
 					break
 				}
-				handler.sendHallo()
+				handler.sendHello()
 			case <-lsuTick.C:
 				if mCastNetworkActive == false {
 					fmt.Println("Time to Send LSU but network not ready")
 					break
 				}
+				fmt.Printf("=======> Link State DB\n")
+				for _, v := range linkstate {
+					fmt.Printf("%#v\n", v)
+				}
+				fmt.Printf("=======> Link State DB\n")
+				handler.UpdateMetrics()
 				// handler.GetHalMetrics()
-				// handler.sendLinkStateUpdate()
 			}
 		}
 	}()
 }
 
-func (handler *PwosfpHandler) sendHallo() {
+func (handler *PwosfpHandler) sendHello() {
 
 	builder := pwospf.NewHello()
 	builder.SetRouterID(IPFromNetIPToUint32(handler.myIP))
 
-	neighbors := handler.haloRouter.GetNeighbors()
+	neighbors := handler.router.GetNeighbors()
 	for _, nbr := range neighbors {
-		builder.AddNeighBor(nbr.rid)
+		builder.AddNeighBor(nbr.RouterId)
 	}
 
 	ospf := builder.BuildRequest()
 
-	fmt.Printf("=> Sending Helllo with neighbors %#v\n", neighbors)
+	fmt.Printf("=> Sending Helllo to neighbors %#v\n", neighbors)
 	handler.ospfOutCh <- ospf
 	_ = ospf
 }
 
-func (handler *PwosfpHandler) handleHello(req pwospf.PWOSPF) {
+func (h *PwosfpHandler) handleHello(req pwospf.PWOSPF) {
 	senderIP := make(net.IP, 4)
 	binary.BigEndian.PutUint32(senderIP, req.RouterID)
-	fmt.Printf("... => I'm Router [%s]: Received OSPF HELLO Message from Router ID [%s]\n", handler.myIP.String(), senderIP.String())
+	fmt.Printf("... => I'm Router [%s]: Received OSPF HELLO Message from Router ID [%s]\n", h.myIP.String(), senderIP.String())
 
-	router := handler.haloRouter
+	router := h.router
 
 	nbr, found := router.GetNeighborByIP(req.RouterID)
 	if !found {
 		router.AddNeighborByIP(req.RouterID, req.Port.IfName)
-		router.RecomputeRoute()
 	}
 
 	fmt.Println("=========== Topology After receiving Hello ============")
-	fmt.Printf("I'm Roter %s\n", handler.myIP.String())
+	fmt.Printf("I'm Roter %s\n", h.myIP.String())
 	nbrs := router.GetNeighbors()
 	for _, nbr = range nbrs {
-		fmt.Printf("Neighboring Router %s\n", IPFromUint32toString(nbr.rid))
+		fmt.Printf("Neighboring Router %s\n", IPFromUint32toString(nbr.RouterId))
 	}
 	fmt.Println("=======================================================")
-	handler.sendLinkStateUpdate()
-}
 
-func (handler *PwosfpHandler) sendLinkStateUpdate() {
-	builder := pwospf.LinkStateBuilder{}
-	nbrs := handler.haloRouter.GetNeighbors()
-	for _, nbr := range nbrs {
-		fmt.Printf("LSA Neighboring Router %s\n", IPFromUint32toString(nbr.rid))
-		builder.AddRouterLSA(nbr.rid, 2, 10)
+	key := h.makeLsaKey(req)
+	fmt.Printf("Adding lsa mapping with key %s\n", key)
+	newLsa := &LinkState{
+		SourceId: IPFromNetIPToUint32(h.myIP),
+		RemoteId: req.RouterID,
+		IfName:   req.Port.IfName,
 	}
-	_ = nbrs
-
-	builder.SetRouterID(IPFromNetIPToUint32(handler.myIP))
-	ospf := builder.BuildRequest()
-	fmt.Println("=> Sending LinkStateUpdate")
-	handler.ospfOutCh <- ospf
+	linkstate[key] = newLsa
 }
 
-func (handler *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
-	router := handler.haloRouter
-	senderIP := make(net.IP, 4)
-	binary.BigEndian.PutUint32(senderIP, req.RouterID)
-	fmt.Printf("... => I'm Router [%s]: Received OSPF Link State Update Message from Router [%s]\n", handler.myIP.String(), senderIP.String())
+func (h *PwosfpHandler) makeLsaKey(req pwospf.PWOSPF) string {
+	return fmt.Sprintf("%s:%s", h.myIP.String(), IPFromUint32toString(req.RouterID))
+}
 
-	// get LSDB entry for sender
-	// if lsa seq is valid
-	// forwardLSUpdate
+func (h *PwosfpHandler) sendLinkStateUpdate() {
+	for _, lsa := range linkstate {
+		if lsa.TxGain > 0 && lsa.SourceId != IPFromNetIPToUint32(h.myIP) {
+			builder := pwospf.LinkStateBuilder{}
+			builder.AddRouterLSA(lsa.RemoteId, lsa.SourceId, lsa.TxGain)
+			builder.SetRouterID(IPFromNetIPToUint32(h.myIP))
+			ospf := builder.BuildRequest()
+			fmt.Printf("=> Sending LinkStateUpdate to Router [%#v]\n", IPFromUint32toString(lsa.RemoteId))
+			h.ospfOutCh <- ospf
+		}
+	}
+}
+
+func (h *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
+
+	fmt.Printf("... => I'm Router [%s]: Received OSPF Link State Update Message from Router [%s]\n",
+		h.myIP.String(), IPFromUint32toString(req.RouterID))
 
 	if lsu, ok := req.Content.(pwospf.LSUpdate); ok {
 		n := int(lsu.NumOfLSAs)
 		for i := 0; i < n; i++ {
 			lsa := lsu.LSAs[i]
 			if rlsas, rok := lsa.Content.(pwospf.RouterLSAV2); rok {
-				for i, val := range rlsas.Routers {
-					fmt.Printf("========> Received Rouer lsa from Router [%s] index [%d] [%#v] Metric[%d] \n", senderIP.String(), i, IPFromUint32toString(val.LinkID), val.Metric)
+				for _, val := range rlsas.Routers {
+					// Check if LSA exists
+					key := h.makeLsaKey(req)
+					fmt.Printf("Adding lsa mapping with key %s", key)
+					fmt.Printf("Values are %#v", val)
+					lsaentry, found := linkstate[key]
+					if !found {
+						newLsa := &LinkState{
+							SourceId: val.LinkID,
+							RemoteId: val.LinkData,
+							IfName:   req.Port.IfName,
+							TxGain:   val.Metric,
+						}
+						linkstate[key] = newLsa
+						fmt.Printf("Receiving Linkstate Update, and adding entry %#v\n", linkstate)
+					}
+					_ = lsaentry
 				}
 			}
 		}
 	}
+}
 
-	modified := router.SetLSDB()
-	if modified {
-		router.RecomputeRoute()
+// Simulate Metrics
+func (h *PwosfpHandler) UpdateMetrics() {
+	for _, lsa := range linkstate {
+		if lsa.SourceId == IPFromNetIPToUint32(h.myIP) {
+			lsa.TxGain = uint16(rand.Intn(100))
+		}
 	}
 }
-
-/*
-func (handler *PwosfpHandler) GetHalMetrics() {
-
-	handler.h.GetFlows(
-		func(fk *hal.FlowKey, tm *hal.FlowTelemetry) error {
-			key := FlowKey{
-				Protocol: uint8(fk.Protocol),
-				SrcAddr:  fk.SrcAddr.String(),
-				DstAddr:  fk.DstAddr.String(),
-				SrcPort:  fk.SrcPort,
-				DstPort:  fk.DstPort,
-			}
-			_ = key
-			handler.flowKeys[key] = tm
-			return nil
-		},
-	)
-	handler.h.GetInterfaces(
-		func(ifc string, tm *hal.InterfaceTelemetry) error {
-			handler.interfaces[ifc] = tm
-			return nil
-		},
-	)
-	// Send LSU
-
-	builder := pwospf.LinkStateBuilder{}
-	builder.AddRouterLSA(1, 2, 10)
-	builder.AddRouterLSA(1, 4, 20)
-	builder.SetRouterID(handler.myIP)
-	ospf := builder.BuildRequest()
-	fmt.Println("=> Sending LinkStateUpdate")
-	handler.ospfOutCh <- ospf
-}
-*/
