@@ -21,7 +21,8 @@ func (fh FLowHandler) Steer(key *hal.FlowKey, nextHop string) {
 	fh.client.Steer(key, nextHop)
 }
 
-func (fh FLowHandler) getFlows(flowCh chan interface{}) {
+func (fh FLowHandler) GetFlows(doneCh chan bool, flowCh chan interface{}) *hal.FlowKey {
+	var firstKey *hal.FlowKey
 	fh.client.GetFlows(func(key *hal.FlowKey, stat *hal.FlowTelemetry) error {
 		f := FlowTelemetry{
 			SrcAddr:      key.SrcAddr,
@@ -36,12 +37,16 @@ func (fh FLowHandler) getFlows(flowCh chan interface{}) {
 			RxTotalBytes: stat.RxTotalBytes,
 		}
 		flowCh <- f
+		if firstKey == nil {
+			firstKey = key
+		}
 
 		return nil
 	})
+	return firstKey
 }
 
-func (fh FLowHandler) GetInterfaces(flowCh chan interface{}) {
+func (fh FLowHandler) GetInterfaces(doneCh chan bool, flowCh chan interface{}) {
 	fh.client.GetInterfaces(
 		func(ifc string, tm *hal.InterfaceTelemetry) error {
 			t := InterfaceTelemetry{

@@ -3,13 +3,13 @@ package halo
 import (
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"strconv"
 	"time"
 
 	hal "github.com/drivenets/vmw_tsf/tsf-hal"
+	"github.com/pellepedro/sample-multicast/pkg/flow"
 	"github.com/pellepedro/sample-multicast/pkg/pwospf"
 )
 
@@ -135,7 +135,6 @@ func (handler *PwosfpHandler) Start() {
 				}
 				fmt.Printf("=======> Link State DB\n")
 				handler.UpdateMetrics()
-				// handler.GetHalMetrics()
 			}
 		}
 	}()
@@ -240,9 +239,38 @@ func (h *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
 
 // Simulate Metrics
 func (h *PwosfpHandler) UpdateMetrics() {
-	for _, lsa := range linkstate {
-		if lsa.SourceId == IPFromNetIPToUint32(h.myIP) {
-			lsa.TxGain = uint16(rand.Intn(100))
+	fh := flow.NewFlowHandler()
+	fmt.Println("======= FEtching Data from Hal API")
+
+	ifCh := make(chan interface{}, 100)
+	doneCh := make(chan bool, 1)
+
+	go handleTelemetry(doneCh, ifCh)
+	fh.CreateHalClient()
+
+	// Blocking Untill all data is received
+	fh.GetInterfaces(doneCh, ifCh)
+
+	testFlowKey := fh.GetFlows(doneCh, ifCh)
+	if testFlowKey != nil {
+		fh.Steer(testFlowKey, "halo2")
+	}
+
+}
+
+func handleTelemetry(doneCh chan bool, dataCh chan interface{}) {
+	for {
+		select {
+		case data := <-dataCh:
+			switch message := data.(type) {
+			case flow.InterfaceTelemetry:
+				fmt.Printf("Receiving Interface Telemetry for interface %s\n", message.IfName)
+			case flow.FlowTelemetry:
+				fmt.Printf("Receiving Flow Telemetry %#v", message)
+			}
+		case <-doneCh:
+			fmt.Printf("Receiving End of Telemetry")
+			return
 		}
 	}
 }
