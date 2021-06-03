@@ -60,7 +60,7 @@ type PwosfpHandler struct {
 	inCh       chan interface{}
 	ospfOutCh  chan interface{}
 	grpcOutCh  chan interface{}
-	h          hal.DnHal
+	halApi     hal.DnHal
 	flowKeys   map[FlowKey]*hal.FlowTelemetry
 	interfaces map[string]*hal.InterfaceTelemetry
 }
@@ -113,6 +113,9 @@ func (handler *PwosfpHandler) processInbounds() {
 
 func (handler *PwosfpHandler) Start() {
 	handler.processInbounds()
+	fmt.Println("About to Connect to DnHal")
+	handler.halApi = hal.NewDnHal()
+
 	go func() {
 		helloTick := time.NewTicker(helloInterval * time.Second)
 		lsuTick := time.NewTicker(lsuInterval * time.Second)
@@ -134,6 +137,7 @@ func (handler *PwosfpHandler) Start() {
 					fmt.Printf("%#v\n", v)
 				}
 				fmt.Printf("=======> Link State DB\n")
+				fmt.Println("About to fetch telemetry from DnHal")
 				handler.UpdateMetrics()
 			}
 		}
@@ -161,21 +165,6 @@ func (h *PwosfpHandler) handleHello(req pwospf.PWOSPF) {
 	senderIP := make(net.IP, 4)
 	binary.BigEndian.PutUint32(senderIP, req.RouterID)
 	fmt.Printf("... => I'm Router [%s]: Received OSPF HELLO Message from Router ID [%s]\n", h.myIP.String(), senderIP.String())
-
-	router := h.router
-
-	nbr, found := router.GetNeighborByIP(req.RouterID)
-	if !found {
-		router.AddNeighborByIP(req.RouterID, req.Port.IfName)
-	}
-
-	fmt.Println("=========== Topology After receiving Hello ============")
-	fmt.Printf("I'm Roter %s\n", h.myIP.String())
-	nbrs := router.GetNeighbors()
-	for _, nbr = range nbrs {
-		fmt.Printf("Neighboring Router %s\n", IPFromUint32toString(nbr.RouterId))
-	}
-	fmt.Println("=======================================================")
 
 	key := h.makeLsaKey(req)
 	fmt.Printf("Adding lsa mapping with key %s\n", key)
@@ -239,21 +228,50 @@ func (h *PwosfpHandler) handleLinkStateUpdate(req pwospf.PWOSPF) {
 
 // Simulate Metrics
 func (h *PwosfpHandler) UpdateMetrics() {
-	fh := flow.NewFlowHandler()
-	fmt.Println("======= FEtching Data from Hal API")
 
-	ifCh := make(chan interface{}, 100)
-	doneCh := make(chan bool, 1)
+	var steerKey *hal.FlowKey
+	target := "halo1"
+	fmt.Println("\nAbout to fetch telemetry from DnHal")
+	err := h.halApi.GetInterfaces(
+		func(ifc string, tm *hal.InterfaceTelemetry) error {
+			fmt.Printf("Processing Getinterfaces for interface %s\n", ifc)
+			fmt.Printf("%s\t%d\t%d\t%d\t%d\t%d\t%f\t%f\n",
+				ifc, tm.Speed,
+				tm.RxBps, tm.RxBytes,
+				tm.TxBps, tm.TxBytes,
+				tm.Link.Delay, tm.Link.Jitter)
+			target = ifc
+			return nil
+		})
+	if err != nil {
+		fmt.Printf("========> Error calling hal.GetInterfaces() : [%s]\n", err.Error())
+	}
 
-	go handleTelemetry(doneCh, ifCh)
-	fh.CreateHalClient()
+	fmt.Println("\nAbout to fetch telemetry from DnHal")
+	err = h.halApi.GetFlows(func(key *hal.FlowKey, stat *hal.FlowTelemetry) error {
+		fmt.Printf("Processing GetFlows for FlowKey %s:%d -> %s:%d\n", key.SrcAddr, key.SrcPort, key.DstAddr, key.DstPort)
+		fmt.Printf("%s:%d\t%s:%d\t%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
+			key.SrcAddr, key.SrcPort,
+			key.DstAddr, key.DstPort,
+			key.Protocol,
+			stat.IngressIf, stat.EgressIf,
+			stat.RxRatePps, stat.RxTotalPkts,
+			stat.RxRateBps, stat.RxTotalBytes)
+		if key != nil && steerKey != nil {
+			steerKey = key
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("========> Error calling hal.GetFlows() : [%s]\n", err.Error())
+	}
 
-	// Blocking Untill all data is received
-	fh.GetInterfaces(doneCh, ifCh)
-
-	testFlowKey := fh.GetFlows(doneCh, ifCh)
-	if testFlowKey != nil {
-		fh.Steer(testFlowKey, "halo2")
+	fmt.Println("\nAbout to call hal.Steer()")
+	if steerKey != nil {
+		err = h.halApi.Steer(steerKey, target)
+		if err != nil {
+			fmt.Printf("========> Error calling hal.Steer() : [%s]\n", err.Error())
+		}
 	}
 
 }
