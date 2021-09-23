@@ -1,29 +1,25 @@
-# Multicast Test
+# TSF HALO
 
-## Description
-A small project to test a 3 node docker-compose network with PWOSPF multicast.
-The nodes in the nework is simulated as docker-conntaioners with multiple network interfaces.
-Each node also connects to a simulates metric server ocer grps to fetch link flow statistic to
-simulate network jitter,latency and badwith constrains.
 
-## Usage
-The provided Makefile supports the following commands
+## Building Container
 
 ```
-build-grpc-server              - Building mock metrics (GRPC) Server
-build-halo                     - Building Halo Container
-generate-proto-stubs           - Generate Protonuff Stubs
-help                           - Show help message
-purge-simulation               - Purge Simulation
-run-simulation                 - Run Simulation (i.e run 3 containers and the link metric server)
+make build-container
+``
+
+## Testing with docker compose
+
 ```
+make start-compose
+``
 
+[Install Docker and Compose](./hack/install-docker-compose-ubuntu.sh)
 
-## Configuration
-See docker compose file for recommended environment variables and arguments.
+The configuration file docker-compose.yml defines a network with four nodes connected with macvlans.
+The .env file defines variables used in docker-compose.yml.
 
-## Simulation
-The PWOSPF simulation requires configuration of multipple networks in each container.
-To attach PWOSPF interfaces (and network) run the script  'sudo ./attach-dynamic-network.sh'
-
-The new interfaces will be auto detected and used for PWOSPF broadcast. 
+```
+INTERFACE=enp0s31f6    # Interface name on host used for macvlan e.g. eth0
+HALO_IMAGE=halo:latest # image name
+HELLO_INTERVAL_MS=100  # interval for sending OSPF HELLO
+```

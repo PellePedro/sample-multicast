@@ -1,0 +1,95 @@
+services:
+  dallas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${HALO_IMAGE}
+    environment:
+     - HELLO_INTERVAL_MS=${HELLO_INTERVAL_MS}
+    networks:
+    - net-dfw-atl
+    - net-dfw-wa
+    - net-dfw-sea
+  atllanta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${HALO_IMAGE}
+    environment:
+     - HELLO_INTERVAL_MS=${HELLO_INTERVAL_MS}
+    networks:
+    - net-dfw-atl
+    - net-atl-wa
+    - net-atl-sea
+  washington:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${HALO_IMAGE}
+    environment:
+     - HELLO_INTERVAL_MS=${HELLO_INTERVAL_MS}
+    networks:
+    - net-dfw-wa
+    - net-atl-wa
+    - net-wa-sea
+  seattle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${HALO_IMAGE}
+    environment:
+     - HELLO_INTERVAL_MS=${HELLO_INTERVAL_MS}
+    networks:
+    - net-dfw-sea
+    - net-atl-sea
+    - net-wa-sea
+
+networks:
+  net-dfw-atl:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.50
+    ipam:
+      config:
+      - subnet: 200.200.200.0/24
+      - subnet: 2001:3984:3900::/64
+  net-dfw-wa:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.55
+    ipam:
+      config:
+      - subnet: 200.200.201.0/24
+      - subnet: 2001:3984:3910::/64
+  net-dfw-sea:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.60
+    ipam:
+      config:
+      - subnet: 200.200.202.0/24
+      - subnet: 2001:3984:3920::/64
+  net-atl-wa:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.65
+    ipam:
+      config:
+      - subnet: 200.200.203.0/24
+      - subnet: 2001:3984:3930::/64
+  net-wa-sea:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.70
+    ipam:
+      config:
+      - subnet: 200.200.204.0/24
+      - subnet: 2001:3984:3940::/64
+  net-atl-sea:
+    driver: macvlan
+    driver_opts:
+      parent: ${INTERFACE}.75
+    ipam:
+      config:
+      - subnet: 200.200.205.0/24
+      - subnet: 2001:3984:3950::/64

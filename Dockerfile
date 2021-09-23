@@ -1,21 +1,30 @@
-FROM golang as builder
+FROM golang:1.17-alpine3.13 as builder
 
-# Build Arguments
-ARG build
-ARG version
-ARG program=cmd/app/*.go
+ADD . /go/src/halo
 
-WORKDIR /src
+WORKDIR /go/src/halo
 
-COPY . /src
+RUN apk add --no-cache git make build-base
 
-RUN   go mod download \
-      && CGO_ENABLED=0 go build \
-      -ldflags="-s -w -X main.Version=${version} -X main.Build=${build}" -o /halo ${program}
+RUN go mod download && \
+    go build -gcflags="all=-N -l" \
+	-ldflags="-X main.Version=1 -X main.Build=123 -X config.Build=123" -o /halo cmd/tsf/halo/main.go
 
-FROM scratch
+
+FROM alpine:latest
+
 COPY --from=builder /halo /halo
 
-EXPOSE 89
+RUN apk add --update --no-cache \
+    netcat-openbsd \
+    bind-tools \
+    curl \
+    bash \
+    darkhttpd \
+    tcpdump \
+    iperf3 \
+    openssh \
+    socat
 
-ENTRYPOINT ["./halo"]
+
+CMD "/halo"
